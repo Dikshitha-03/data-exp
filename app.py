@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import ijson
+import re
 
 st.set_page_config(layout="wide", page_title="Data Explorer")
 
@@ -41,7 +42,6 @@ def load_data(file, max_rows=20000):
 
     df = pd.DataFrame(data)
 
-    # Clean data
     df = df.fillna("")
     for col in df.columns:
         df[col] = df[col].astype(str).str.strip()
@@ -118,16 +118,19 @@ def apply_filters(df, filters):
 # -----------------------------
 def render_row(row):
     activity_id = row.get("fields.activity_id", "—")
-    name = row.get("fields.name", "—")
+    raw_name = row.get("fields.name", "—")
     factor = row.get("fields.factor", "—")
     source = row.get("fields.source", "—")
     year = row.get("fields.year", "—")
     region = row.get("fields.region", "—")
 
-    # ✅ ONLY activity name in collapsed view
+    # 🔥 CLEAN NAME (remove [IN 2019] etc.)
+    name = re.sub(r"\[.*?\]", "", raw_name).strip()
+
+    # Only clean name in collapsed view
     with st.expander(name):
 
-        # ✅ Factor shown AFTER opening
+        # Factor shown AFTER expanding
         st.caption("Emission Factor")
 
         st.markdown(
@@ -147,7 +150,7 @@ def render_row(row):
 
         st.markdown("---")
 
-        # Summary row
+        # Summary
         c1, c2, c3, c4 = st.columns(4)
 
         c1.markdown(f"**Activity ID**  \n{activity_id}")
@@ -157,7 +160,7 @@ def render_row(row):
 
         st.markdown("---")
 
-        # Detailed info
+        # Details
         st.markdown("### Detailed Information")
         st.write(f"**Dataset:** {row.get('fields.source_dataset', '—')}")
         st.write(f"**Description:** {row.get('fields.description', '—')}")
