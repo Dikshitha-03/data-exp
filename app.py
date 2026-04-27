@@ -32,12 +32,11 @@ def flatten_json(y, parent_key='', sep='.'):
 # -----------------------------
 def stream_json(file_path):
     with open(file_path, "rb") as f:
-        objects = ijson.items(f, "item")
-        for obj in objects:
+        for obj in ijson.items(f, "item"):
             yield flatten_json(obj)
 
 # -----------------------------
-# Load data
+# Load Data (chunk safe)
 # -----------------------------
 def load_data(file_path, max_rows=20000):
     data = []
@@ -56,7 +55,7 @@ def load_data(file_path, max_rows=20000):
     return df
 
 # -----------------------------
-# FILTERS
+# FILTER UI
 # -----------------------------
 def render_filters(df):
     st.sidebar.header("🔍 Filters")
@@ -64,37 +63,37 @@ def render_filters(df):
     FACETS = ["fields.category", "fields.sector", "fields.region", "fields.year"]
 
     if "filters" not in st.session_state:
-        st.session_state.filters = {col: [] for col in FACETS}
+        st.session_state.filters = {c: [] for c in FACETS}
 
     for col in FACETS:
         if col not in df.columns:
             continue
 
-        label = col.split('.')[-1].capitalize()
+        label = col.split(".")[-1].capitalize()
         values = sorted(df[col].dropna().unique())
 
         selected = st.sidebar.multiselect(
-            f"{label}",
-            options=values,
-            default=st.session_state.filters.get(col, []),
-            key=f"ui_{col}"
+            label,
+            values,
+            default=st.session_state.filters[col],
+            key=f"f_{col}"
         )
 
         st.session_state.filters[col] = selected
 
-    col1, col2 = st.sidebar.columns(2)
+    c1, c2 = st.sidebar.columns(2)
 
-    if col1.button("Apply"):
+    if c1.button("Apply"):
         return {k: v for k, v in st.session_state.filters.items() if v}
 
-    if col2.button("Clear"):
-        st.session_state.filters = {col: [] for col in FACETS}
+    if c2.button("Clear"):
+        st.session_state.filters = {c: [] for c in FACETS}
         st.rerun()
 
     return None
 
 # -----------------------------
-# Apply filters
+# Apply Filters
 # -----------------------------
 def apply_filters(df, filters):
     for col, vals in filters.items():
@@ -107,47 +106,82 @@ def apply_filters(df, filters):
     return df
 
 # -----------------------------
-# Row UI
+# ROW UI (FIXED + CLEAN)
 # -----------------------------
 def render_row(row):
     raw_name = row.get("fields.name", "—")
     name = re.sub(r"\[.*?\]", "", raw_name).strip()
 
-    with st.expander(name):
+    with st.expander(f" {name}"):
+
+        # Header section
+        st.markdown("## Activity Overview")
 
         st.markdown(
-            f"**Factor:** {row.get('fields.factor','—')}"
+            f"** Emission Factor:** `{row.get('fields.factor', '—')}`"
         )
+
+        st.markdown("---")
+
+        # Metadata section (FIXED TITLES)
+        st.markdown("## Metadata")
 
         c1, c2, c3, c4 = st.columns(4)
 
-        c1.write(f"ID: {row.get('fields.activity_id','—')}")
-        c2.write(f"Source: {row.get('fields.source','—')}")
-        c3.write(f"Year: {row.get('fields.year','—')}")
-        c4.write(f"Region: {row.get('fields.region','—')}")
+        with c1:
+            st.markdown("**Activity ID**")
+            st.write(row.get("fields.activity_id", "—"))
+
+        with c2:
+            st.markdown("**Source**")
+            st.write(row.get("fields.source", "—"))
+
+        with c3:
+            st.markdown("**Year**")
+            st.write(row.get("fields.year", "—"))
+
+        with c4:
+            st.markdown("**Region**")
+            st.write(row.get("fields.region", "—"))
 
         st.markdown("---")
+
+        # Detailed section
+        st.markdown("##  Detailed Information")
+
+        st.markdown("**Dataset**")
+        st.write(row.get("fields.source_dataset", "—"))
+
+        st.markdown("**Description**")
         st.write(row.get("fields.description", "—"))
 
+        st.markdown("**Status**")
+        st.write("Current")
+
 # -----------------------------
-# MAIN APP
+# MAIN APP (CHUNK SAFE)
 # -----------------------------
 def main():
     st.title("📊 Data Explorer")
 
-    # ✅ Manual file selection (NOT upload memory)
-    uploaded_file = st.file_uploader("Choose JSON file", type=["json"])
+    uploaded_file = st.file_uploader("Upload JSON file", type=["json"])
 
     if uploaded_file:
 
-        # 🔥 Save temporarily to disk (critical fix)
+        #  SAFE chunk write (no RAM explosion)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as tmp:
-            tmp.write(uploaded_file.read())
+            while True:
+                chunk = uploaded_file.read(1024 * 1024 * 5)  # 5MB chunks
+                if not chunk:
+                    break
+                tmp.write(chunk)
+
             temp_path = tmp.name
 
-        # Load from disk stream (safe for huge files)
+        # Load streaming
         df = load_data(temp_path)
 
+        # Filters
         filters = render_filters(df)
 
         if filters:
@@ -155,11 +189,14 @@ def main():
 
         st.markdown(f"### Results ({len(df)})")
 
+        if len(df) == 0:
+            st.warning("No matching results found.")
+
         for _, row in df.iterrows():
             render_row(row)
 
     else:
-        st.info("Select a JSON file to begin")
+        st.info("Upload a JSON file to begin analysis")
 
 if __name__ == "__main__":
     main()
