@@ -2,33 +2,13 @@ import streamlit as st
 import pandas as pd
 import ijson
 import re
-import os
 
 st.set_page_config(layout="wide", page_title="Data Explorer")
 
 # -----------------------------
-# SESSION STATE
+# Flatten JSON
 # -----------------------------
-if "df" not in st.session_state:
-    st.session_state.df = None
-
-if "filtered_df" not in st.session_state:
-    st.session_state.filtered_df = None
-
-
-# -----------------------------
-# STREAM JSON (NO FULL LOAD)
-# -----------------------------
-def stream_json(file_path):
-    with open(file_path, "rb") as f:
-        for obj in ijson.items(f, "item"):
-            yield obj
-
-
-# -----------------------------
-# FLATTEN JSON
-# -----------------------------
-def flatten_json(y, parent_key="", sep="."):
+def flatten_json(y, parent_key='', sep='.'):
     items = []
 
     if isinstance(y, dict):
@@ -46,152 +26,185 @@ def flatten_json(y, parent_key="", sep="."):
 
     return dict(items)
 
+# -----------------------------
+# Stream JSON (memory-safe)
+# -----------------------------
+def stream_json(file):
+    objects = ijson.items(file, "item")
+    for obj in objects:
+        yield flatten_json(obj)
 
 # -----------------------------
-# LOAD DATA (STREAMING)
+# Load Data (optimized)
 # -----------------------------
-def load_data(file_path, max_rows=20000):
+def load_data(file, max_rows=20000):
     data = []
 
-    for i, record in enumerate(stream_json(file_path)):
-        data.append(flatten_json(record))
+    for i, record in enumerate(stream_json(file)):
+        data.append(record)
 
         if i >= max_rows:
             break
 
-    df = pd.DataFrame(data).fillna("")
+    df = pd.DataFrame(data)
+
+    # Clean data
+    df = df.fillna("")
 
     for col in df.columns:
         df[col] = df[col].astype(str).str.strip()
 
     return df
 
-
-# -----------------------------
-# FILTER
-# -----------------------------
-def apply_filters(df, filters):
-    for col, vals in filters.items():
-        vals = [v.lower().strip() for v in vals]
-
-        df = df[
-            df[col].astype(str).str.lower().str.strip().isin(vals)
-        ]
-
-    return df
-
-
-# -----------------------------
-# UI ROW
-# -----------------------------
-def render_row(row):
-    name = re.sub(r"\[.*?\]", "", str(row.get("fields.name", "—"))).strip()
-
-    with st.expander(name):
-
-        st.markdown("Details")
-
-        st.write("Factor:", row.get("fields.factor", "—"))
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        with c1:
-            st.write("Activity ID")
-            st.write(row.get("fields.activity_id", "—"))
-
-        with c2:
-            st.write("Source")
-            st.write(row.get("fields.source", "—"))
-
-        with c3:
-            st.write("Year")
-            st.write(row.get("fields.year", "—"))
-
-        with c4:
-            st.write("Region")
-            st.write(row.get("fields.region", "—"))
-
-        st.markdown("Description")
-        st.write(row.get("fields.description", "—"))
-
-
 # -----------------------------
 # FILTER UI
 # -----------------------------
 def render_filters(df):
-    st.sidebar.header("Filters")
+    st.sidebar.header(" Filters")
 
     FACETS = ["fields.category", "fields.sector", "fields.region", "fields.year"]
 
     if "filters" not in st.session_state:
-        st.session_state.filters = {c: [] for c in FACETS}
+        st.session_state.filters = {col: [] for col in FACETS}
 
     for col in FACETS:
         if col not in df.columns:
             continue
 
+        label = col.split('.')[-1].capitalize()
+        st.sidebar.markdown(f"### {label}")
+
         values = sorted(df[col].dropna().unique())
 
         selected = st.sidebar.multiselect(
-            col.split(".")[-1],
-            values,
-            default=st.session_state.filters[col],
-            key=col
+            f"Select {label}",
+            options=values,
+            default=st.session_state.filters.get(col, []),
+            key=f"ui_{col}"
         )
 
         st.session_state.filters[col] = selected
 
-    c1, c2 = st.sidebar.columns(2)
+    col1, col2 = st.sidebar.columns(2)
 
-    if c1.button("Apply"):
-        return {k: v for k, v in st.session_state.filters.items() if v}
+    apply_clicked = col1.button("Apply")
+    clear_clicked = col2.button("Clear")
 
-    if c2.button("Clear"):
-        st.session_state.filters = {c: [] for c in FACETS}
+    if clear_clicked:
+        st.session_state.filters = {col: [] for col in FACETS}
         st.rerun()
+
+    if apply_clicked:
+        return {
+            col: vals
+            for col, vals in st.session_state.filters.items()
+            if vals
+        }
 
     return None
 
+# -----------------------------
+# Apply Filters
+# -----------------------------
+def apply_filters(df, filters):
+    filtered = df.copy()
+
+    for col, vals in filters.items():
+        clean_vals = [str(v).strip().lower() for v in vals]
+
+        filtered = filtered[
+            filtered[col]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .isin(clean_vals)
+        ]
+
+    return filtered
+
+# -----------------------------
+# Render Row UI
+# -----------------------------
+def render_row(row):
+    activity_id = row.get("fields.activity_id", "—")
+    raw_name = row.get("fields.name", "—")
+    factor = row.get("fields.factor", "—")
+    source = row.get("fields.source", "—")
+    year = row.get("fields.year", "—")
+    region = row.get("fields.region", "—")
+
+    # Clean name (remove [IN 2019] etc.)
+    name = re.sub(r"\[.*?\]", "", raw_name).strip()
+
+    with st.expander(name):
+
+        st.caption("Emission Factor")
+
+        st.markdown(
+            f"""
+            <div style='background-color:#1A73E8;
+                        color:white;
+                        padding:8px 14px;
+                        border-radius:16px;
+                        display:inline-block;
+                        font-weight:600;
+                        margin-bottom:10px'>
+                {factor}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        st.markdown("---")
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        c1.markdown(f"**Activity ID**  \n{activity_id}")
+        c2.markdown(f"**Source**  \n{source}")
+        c3.markdown(f"**Year**  \n{year}")
+        c4.markdown(f"**Region**  \n{region}")
+
+        st.markdown("---")
+
+        st.markdown("### Detailed Information")
+        st.write(f"**Dataset:** {row.get('fields.source_dataset', '—')}")
+        st.write(f"**Description:** {row.get('fields.description', '—')}")
+        st.write("**Status:** Current")
 
 # -----------------------------
 # MAIN APP
 # -----------------------------
 def main():
-    st.title("Data Explorer")
+    st.title("📊 Data Explorer")
 
-    file_path = st.text_input("Enter full JSON file path")
+    # ✅ FIX: no uploader, use file path instead
+    file_path = st.text_input("Enter JSON file path")
 
     if file_path:
 
-        if not os.path.exists(file_path):
-            st.error("File not found. Check path.")
-            return
+        try:
+            with open(file_path, "rb") as file:
+                df = load_data(file)
 
-        if st.session_state.df is None:
-            with st.spinner("Loading data..."):
-                st.session_state.df = load_data(file_path)
+            filters = render_filters(df)
 
-        df = st.session_state.df
+            if filters is not None:
+                df = apply_filters(df, filters)
 
-        filters = render_filters(df)
+            st.markdown(f"### Results ({len(df)})")
 
-        if filters:
-            st.session_state.filtered_df = apply_filters(df, filters)
-        else:
-            st.session_state.filtered_df = df
+            if len(df) == 0:
+                st.warning("No results found. Try different filters.")
 
-        view_df = st.session_state.filtered_df
+            for _, row in df.iterrows():
+                render_row(row)
 
-        st.write("Results:", len(view_df))
-
-        MAX_ROWS = 200
-
-        for _, row in view_df.head(MAX_ROWS).iterrows():
-            render_row(row)
+        except Exception as e:
+            st.error(f"Error loading file: {e}")
 
     else:
-        st.info("Enter file path to start")
+        st.info("Enter full local JSON file path to begin (no upload needed)")
 
-
+# -----------------------------
 if __name__ == "__main__":
     main()
