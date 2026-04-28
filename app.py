@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import ijson
 import re
+import zipfile
+import io
 
 st.set_page_config(layout="wide", page_title="Data Explorer")
 
@@ -10,20 +12,16 @@ st.set_page_config(layout="wide", page_title="Data Explorer")
 # -----------------------------
 def flatten_json(y, parent_key='', sep='.'):
     items = []
-
     if isinstance(y, dict):
         for k, v in y.items():
             new_key = f"{parent_key}{sep}{k}" if parent_key else k
             items.extend(flatten_json(v, new_key, sep=sep).items())
-
     elif isinstance(y, list):
         for i, v in enumerate(y):
             new_key = f"{parent_key}{sep}{i}"
             items.extend(flatten_json(v, new_key, sep=sep).items())
-
     else:
         items.append((parent_key, y))
-
     return dict(items)
 
 # -----------------------------
@@ -39,29 +37,39 @@ def stream_json(file):
 # -----------------------------
 def load_data(file, max_rows=20000):
     data = []
-
     for i, record in enumerate(stream_json(file)):
         data.append(record)
-
         if i >= max_rows:
             break
-
     df = pd.DataFrame(data)
-
-    # Clean data
     df = df.fillna("")
-
     for col in df.columns:
         df[col] = df[col].astype(str).str.strip()
-
     return df
+
+# -----------------------------
+# Open uploaded file (zip or json)
+# -----------------------------
+def open_uploaded_file(uploaded_file):
+    filename = uploaded_file.name
+
+    if filename.endswith(".zip"):
+        with zipfile.ZipFile(io.BytesIO(uploaded_file.read())) as zf:
+            # Find the first .json file inside the zip
+            json_files = [f for f in zf.namelist() if f.endswith(".json")]
+            if not json_files:
+                raise ValueError("No .json file found inside the zip archive.")
+            with zf.open(json_files[0]) as json_file:
+                # Read into BytesIO so ijson can seek/stream it
+                return io.BytesIO(json_file.read())
+    else:
+        return io.BytesIO(uploaded_file.read())
 
 # -----------------------------
 # FILTER UI
 # -----------------------------
 def render_filters(df):
-    st.sidebar.header(" Filters")
-
+    st.sidebar.header("Filters")
     FACETS = ["fields.category", "fields.sector", "fields.region", "fields.year"]
 
     if "filters" not in st.session_state:
@@ -70,23 +78,18 @@ def render_filters(df):
     for col in FACETS:
         if col not in df.columns:
             continue
-
         label = col.split('.')[-1].capitalize()
         st.sidebar.markdown(f"### {label}")
-
         values = sorted(df[col].dropna().unique())
-
         selected = st.sidebar.multiselect(
             f"Select {label}",
             options=values,
             default=st.session_state.filters.get(col, []),
             key=f"ui_{col}"
         )
-
         st.session_state.filters[col] = selected
 
     col1, col2 = st.sidebar.columns(2)
-
     apply_clicked = col1.button("Apply")
     clear_clicked = col2.button("Clear")
 
@@ -95,11 +98,7 @@ def render_filters(df):
         st.rerun()
 
     if apply_clicked:
-        return {
-            col: vals
-            for col, vals in st.session_state.filters.items()
-            if vals
-        }
+        return {col: vals for col, vals in st.session_state.filters.items() if vals}
 
     return None
 
@@ -108,18 +107,11 @@ def render_filters(df):
 # -----------------------------
 def apply_filters(df, filters):
     filtered = df.copy()
-
     for col, vals in filters.items():
         clean_vals = [str(v).strip().lower() for v in vals]
-
         filtered = filtered[
-            filtered[col]
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .isin(clean_vals)
+            filtered[col].astype(str).str.strip().str.lower().isin(clean_vals)
         ]
-
     return filtered
 
 # -----------------------------
@@ -133,39 +125,25 @@ def render_row(row):
     year = row.get("fields.year", "—")
     region = row.get("fields.region", "—")
 
-    # Clean name (remove [IN 2019] etc.)
     name = re.sub(r"\[.*?\]", "", raw_name).strip()
 
     with st.expander(name):
-
         st.caption("Emission Factor")
-
         st.markdown(
             f"""
-            <div style='background-color:#1A73E8;
-                        color:white;
-                        padding:8px 14px;
-                        border-radius:16px;
-                        display:inline-block;
-                        font-weight:600;
-                        margin-bottom:10px'>
-                {factor}
-            </div>
+            <div style='background-color:#1A73E8;color:white;padding:8px 14px;
+                        border-radius:16px;display:inline-block;font-weight:600;
+                        margin-bottom:10px'>{factor}</div>
             """,
             unsafe_allow_html=True
         )
-
         st.markdown("---")
-
         c1, c2, c3, c4 = st.columns(4)
-
         c1.markdown(f"**Activity ID**  \n{activity_id}")
         c2.markdown(f"**Source**  \n{source}")
         c3.markdown(f"**Year**  \n{year}")
         c4.markdown(f"**Region**  \n{region}")
-
         st.markdown("---")
-
         st.markdown("### Detailed Information")
         st.write(f"**Dataset:** {row.get('fields.source_dataset', '—')}")
         st.write(f"**Description:** {row.get('fields.description', '—')}")
@@ -177,22 +155,25 @@ def render_row(row):
 def main():
     st.title("📊 Data Explorer")
 
-    # ✅ FIX: no uploader, use file path instead
-    file_path = st.text_input("Enter JSON file path")
+    uploaded_file = st.file_uploader(
+        "Upload your JSON or ZIP file",
+        type=["json", "zip"],
+        help="ZIP your JSON first to stay under the 200 MB upload limit"
+    )
 
-    if file_path:
-
+    if uploaded_file:
         try:
-            with open(file_path, "rb") as file:
-                df = load_data(file)
+            with st.spinner("Loading data..."):
+                file_obj = open_uploaded_file(uploaded_file)
+                df = load_data(file_obj)
+
+            st.success(f"Loaded {len(df):,} records")
 
             filters = render_filters(df)
-
             if filters is not None:
                 df = apply_filters(df, filters)
 
-            st.markdown(f"### Results ({len(df)})")
-
+            st.markdown(f"### Results ({len(df):,})")
             if len(df) == 0:
                 st.warning("No results found. Try different filters.")
 
@@ -201,10 +182,8 @@ def main():
 
         except Exception as e:
             st.error(f"Error loading file: {e}")
-
     else:
-        st.info("Enter full local JSON file path to begin (no upload needed)")
+        st.info("Upload a .json or .zip file to begin")
 
-# -----------------------------
 if __name__ == "__main__":
     main()
