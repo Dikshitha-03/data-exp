@@ -62,22 +62,8 @@ st.markdown("""
 # ─────────────────────────────────────────
 # Data helpers
 # ─────────────────────────────────────────
-def flatten_json(y, parent_key='', sep='.'):
-    items = []
-    if isinstance(y, dict):
-        for k, v in y.items():
-            new_key = f"{parent_key}{sep}{k}" if parent_key else k
-            items.extend(flatten_json(v, new_key, sep=sep).items())
-    elif isinstance(y, list):
-        for i, v in enumerate(y):
-            new_key = f"{parent_key}{sep}{i}"
-            items.extend(flatten_json(v, new_key, sep=sep).items())
-    else:
-        items.append((parent_key, y))
-    return dict(items)
 
-
-# Only extract the fields we actually need — much faster
+# Only extract the fields we actually need
 NEEDED_FIELDS = {
     "fields.name", "fields.factor", "fields.source", "fields.year",
     "fields.region", "fields.activity_id", "id",
@@ -87,13 +73,40 @@ NEEDED_FIELDS = {
     "fields.year_released", "fields.data_version",
 }
 
-def extract_needed(flat: dict) -> dict:
-    return {k: str(v).strip() for k, v in flat.items() if k in NEEDED_FIELDS}
+# Map dotted paths → flat dict keys without full recursive flattening
+def extract_from_obj(obj: dict) -> dict:
+    """
+    Directly extract only the fields we need from a parsed JSON object.
+    Much faster than fully flattening every nested key.
+    """
+    result = {}
+
+    # Top-level id
+    if "id" in obj:
+        result["id"] = str(obj["id"]).strip()
+
+    # fields.* keys
+    fields = obj.get("fields", {})
+    if isinstance(fields, dict):
+        for key in (
+            "name", "factor", "source", "year", "region", "activity_id",
+            "sector", "category", "source_dataset", "description",
+            "lca_activity", "scope", "unit_type", "co2e_calculation_method",
+            "year_released", "data_version",
+        ):
+            val = fields.get(key)
+            if val is not None:
+                result[f"fields.{key}"] = str(val).strip()
+
+    return result
 
 
 @st.cache_data(show_spinner=False)
-def load_data(file_bytes: bytes, filename: str, max_rows: int = 20000) -> pd.DataFrame:
-    """Cached: only runs once per uploaded file."""
+def load_data(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    """
+    Load ALL records — no row cap.
+    Uses ijson for memory-efficient streaming so even multi-GB files work.
+    """
     # Handle zip
     if filename.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
@@ -106,10 +119,8 @@ def load_data(file_bytes: bytes, filename: str, max_rows: int = 20000) -> pd.Dat
         raw = io.BytesIO(file_bytes)
 
     data = []
-    for i, obj in enumerate(ijson.items(raw, "item")):
-        if i >= max_rows:
-            break
-        data.append(extract_needed(flatten_json(obj)))
+    for obj in ijson.items(raw, "item"):
+        data.append(extract_from_obj(obj))
 
     df = pd.DataFrame(data)
     df = df.fillna("—")
@@ -129,7 +140,7 @@ def unique_vals(df, col):
 
 
 # ─────────────────────────────────────────
-# Sidebar — renders widgets, stores to session_state immediately
+# Sidebar filters
 # ─────────────────────────────────────────
 def render_filters(df):
     st.sidebar.header("🔍 Filters")
@@ -185,18 +196,17 @@ def render_filters(df):
 
     st.sidebar.markdown("---")
     c1, c2 = st.sidebar.columns(2)
-    apply  = c1.button("✅ Apply",  use_container_width=True)
-    clear  = c2.button("🗑 Clear",  use_container_width=True)
+    apply = c1.button("✅ Apply", use_container_width=True)
+    clear = c2.button("🗑 Clear", use_container_width=True)
 
     if clear:
         for k in ["f_keyword","f_sector","f_cat","f_region","f_source",
                   "f_year","f_unit","f_scope","f_lca","f_license","f_version",
-                  "active_filters"]:
+                  "active_filters", "page_num"]:
             st.session_state.pop(k, None)
         st.rerun()
 
     if apply:
-        # Persist filters so they survive reruns
         st.session_state["active_filters"] = {
             "keyword":               keyword.strip().lower(),
             "fields.sector":         sector_sel,
@@ -210,6 +220,7 @@ def render_filters(df):
             "license":               license_choice,
             "fields.data_version":   version_sel if version_sel != "(any)" else "",
         }
+        st.session_state["page_num"] = 0  # reset to first page on new filter
         st.rerun()
 
 
@@ -220,18 +231,16 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
 
     filtered = df.copy()
 
-    # Keyword search
     kw = filters.get("keyword", "")
     if kw:
-        name_col = filtered.get("fields.name", pd.Series(dtype=str)) if "fields.name" in filtered else pd.Series([""] * len(filtered))
-        desc_col = filtered.get("fields.description", pd.Series(dtype=str)) if "fields.description" in filtered else pd.Series([""] * len(filtered))
+        name_col = filtered["fields.name"] if "fields.name" in filtered else pd.Series([""] * len(filtered))
+        desc_col = filtered["fields.description"] if "fields.description" in filtered else pd.Series([""] * len(filtered))
         mask = (
             name_col.str.lower().str.contains(kw, na=False) |
             desc_col.str.lower().str.contains(kw, na=False)
         )
         filtered = filtered[mask]
 
-    # Multi-select facets
     facet_cols = [
         "fields.sector", "fields.category", "fields.region",
         "fields.source", "fields.year", "fields.unit_type",
@@ -245,7 +254,6 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
                 filtered[col].astype(str).str.strip().str.lower().isin(clean)
             ]
 
-    # Data version
     dv = filters.get("fields.data_version", "")
     if dv and "fields.data_version" in filtered.columns:
         filtered = filtered[filtered["fields.data_version"].str.strip() == dv.strip()]
@@ -330,6 +338,40 @@ def render_row(row, idx):
 
 
 # ─────────────────────────────────────────
+# Pagination controls
+# ─────────────────────────────────────────
+PAGE_SIZE = 50  # rows rendered per page — tune this for speed vs. scroll comfort
+
+def render_pagination(total: int) -> int:
+    """Renders prev/next controls and returns the current page index (0-based)."""
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+
+    if "page_num" not in st.session_state:
+        st.session_state["page_num"] = 0
+
+    page = st.session_state["page_num"]
+    page = max(0, min(page, total_pages - 1))  # clamp
+
+    col1, col2, col3 = st.columns([1, 3, 1])
+    with col1:
+        if st.button("← Prev", disabled=(page == 0), use_container_width=True):
+            st.session_state["page_num"] = page - 1
+            st.rerun()
+    with col2:
+        st.markdown(
+            f"<div style='text-align:center;padding-top:6px;font-size:13px;color:#555'>"
+            f"Page {page + 1} of {total_pages} &nbsp;·&nbsp; {total:,} results</div>",
+            unsafe_allow_html=True,
+        )
+    with col3:
+        if st.button("Next →", disabled=(page >= total_pages - 1), use_container_width=True):
+            st.session_state["page_num"] = page + 1
+            st.rerun()
+
+    return page
+
+
+# ─────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────
 def main():
@@ -345,21 +387,17 @@ def main():
         return
 
     try:
-        # Read bytes once; cache key is (bytes, filename)
         file_bytes = uploaded_file.read()
 
-        with st.spinner("Loading data… (first load only, then cached)"):
+        with st.spinner("Loading data… (streamed once, then cached)"):
             df = load_data(file_bytes, uploaded_file.name)
 
         st.success(f"✅ Loaded {len(df):,} records")
 
-        # Render sidebar (widgets write directly to session_state)
         render_filters(df)
-
-        # Apply persisted filters
         filtered_df = apply_filters(df)
 
-        # Show active filter summary
+        # Active filter summary
         active = st.session_state.get("active_filters", {})
         if active:
             tags = []
@@ -370,18 +408,28 @@ def main():
             if tags:
                 st.info("🔎 Active filters: " + " | ".join(tags))
 
-        st.markdown(f"### Results ({len(filtered_df):,})")
-
-        if len(filtered_df) == 0:
+        total = len(filtered_df)
+        if total == 0:
             st.warning("No results found. Try different filters.")
             return
 
+        # ── Pagination ──────────────────────────────
+        page = render_pagination(total)
+        start = page * PAGE_SIZE
+        end   = min(start + PAGE_SIZE, total)
+        page_df = filtered_df.iloc[start:end]
+        # ─────────────────────────────────────────────
+
         render_table_header()
-        for idx, (_, row) in enumerate(filtered_df.iterrows()):
+        for idx, (_, row) in enumerate(page_df.iterrows()):
             render_row(row, idx)
+
+        # Bottom pagination so you don't have to scroll back up
+        render_pagination(total)
 
     except Exception as e:
         st.error(f"Error: {e}")
+        raise  # re-raise in dev so you see the full traceback
 
 
 if __name__ == "__main__":
