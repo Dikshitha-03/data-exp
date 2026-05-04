@@ -397,7 +397,7 @@ def render_filters(options: dict, col_map: dict) -> dict:
 
     # ── Keyword
     keyword = st.sidebar.text_input(
-        "🔍 Search",
+        " Search",
         value=cur.get("keyword", ""),
         placeholder="name / description / category…",
         key="f_keyword",
@@ -583,7 +583,7 @@ def render_row(row, idx):
     co2e_display = f"{_fmt_factor(co2e)} {factor_unit}" if co2e != "—" else "—"
     active_class = "status-active" if is_active == "true" else "status-inactive"
     active_label = "Active" if is_active == "true" else "Inactive"
-    custom_label = "✅ Custom" if is_custom == "true" else "Standard"
+    custom_label = " Custom" if is_custom == "true" else "Standard"
 
     if source_url != "—":
         source_html = f'<a href="{source_url}" target="_blank" class="kv-link">{source_name}</a>'
@@ -694,7 +694,7 @@ def render_table_picker(db_url: str):
             src_table = st.selectbox("Factor Source table (optional)", options=src_options, index=0,
                                      key="tbl_src", help="Leave blank if no separate source table.")
 
-        if st.button("✅ Use these tables", type="primary"):
+        if st.button("Use these tables", type="primary"):
             st.session_state["ef_table"]  = ef_table
             st.session_state["src_table"] = src_table or ""
             for k in ["active_filters", "page_num"]:
@@ -710,7 +710,7 @@ def render_table_picker(db_url: str):
         col_map = build_column_map(db_url, ef_tbl)
         missing = [c for c in COLUMN_ALIASES if c not in col_map]
         if missing:
-            with st.expander(f"ℹ️ Column mapping — {len(col_map)} matched, {len(missing)} not found"):
+            with st.expander(f" Column mapping — {len(col_map)} matched, {len(missing)} not found"):
                 st.markdown("**Matched columns:**")
                 for canon, actual in col_map.items():
                     label = f"`{canon}`" if canon == actual else f"`{canon}` → `{actual}`"
@@ -755,7 +755,7 @@ def main():
     with st.expander("🔌 Database Connection",
                      expanded=("db_url" not in st.session_state)):
         if "db_url" in st.session_state:
-            st.success("✅ Connected.")
+            st.success(" Connected.")
             st.caption("To use a different database, enter a new URL and click Connect.")
         else:
             st.caption("Enter your PostgreSQL connection URL. Session is read-only.")
@@ -794,7 +794,7 @@ def main():
         st.warning("No emission factor table found. Run `python manage.py migrate` then refresh.")
         all_tables = discover_tables(db_url)
         if all_tables:
-            with st.expander("📋 Tables in database"):
+            with st.expander(" Tables in database"):
                 st.write(all_tables)
         return
 
