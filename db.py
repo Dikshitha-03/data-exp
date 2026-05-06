@@ -31,7 +31,7 @@ COLUMN_ALIASES = {
     "external_ref":         ["external_ref", "external_reference", "ref"],
     "scope":                ["scope", "ghg_scope", "emission_scope", "ghg_category", "scope_category", "scope_name"],
     "sector":               ["sector", "industry_sector", "economic_sector"],
-    "subcategory":          ["subcategory", "sub_category", "category_sector", "sector_detail"],
+    "subcategory":          ["subcategory", "sub_category", "category_sector", "sector_detail", "sector"],
     "category_name":        ["category_name", "category", "activity_category"],
     "name":                 ["name", "activity_name", "factor_name", "title"],
     "activity_type":        ["activity_type", "type", "factor_type"],
@@ -330,6 +330,131 @@ def build_where(filters: dict, col_map: dict, src_name_col: str = None) -> tuple
 
     where_sql = ("WHERE " + " AND ".join(parts)) if parts else ""
     return where_sql, params
+
+
+def fetch_grouped_page(db_url: str, ef_table: str, src_table: str,
+                       filters: dict, page: int) -> tuple:
+    """
+    Returns one row per distinct climatiq_id (activity_id), with:
+      - activity_id, name, description, sector, category_name, lca_activity
+      - factor_count  : how many individual records exist
+      - years         : comma-separated distinct years
+      - regions       : comma-separated distinct regions
+      - source_names  : comma-separated distinct source names
+    """
+    col_map = build_column_map(db_url, ef_table)
+    cid_col  = col_map.get("climatiq_id")
+    name_col = col_map.get("name")
+    if not cid_col or not name_col:
+        # fallback to flat page if no activity_id column
+        return fetch_page(db_url, ef_table, src_table, filters, page)
+
+    src_cols     = get_table_columns(db_url, src_table) if src_table else []
+    src_name_col = next((c for c in ["name", "source_name", "title"] if c in src_cols), None)
+    src_id_col   = col_map.get("source_id")
+
+    join_sql = ""
+    src_select = ""
+    if src_id_col and src_table and src_name_col:
+        # Source name comes from a joined source table
+        join_sql   = f'LEFT JOIN "{src_table}" s ON ef."{src_id_col}"=s.id'
+        src_select = f', STRING_AGG(DISTINCT s."{src_name_col}", \', \') AS source_names'
+    elif src_id_col:
+        # Source column is directly on the EF table (holds the name itself)
+        src_select = f', STRING_AGG(DISTINCT CAST(ef."{src_id_col}" AS TEXT), \', \') AS source_names'
+
+    where_sql, params = build_where(filters, col_map, src_name_col)
+
+    year_col   = col_map.get("year")
+    region_col = col_map.get("region")
+    desc_col   = col_map.get("description")
+    sect_col   = col_map.get("sector")
+    cat_col    = col_map.get("category_name")
+    lca_col    = col_map.get("lca_activity")
+
+    year_agg   = f'STRING_AGG(DISTINCT CAST(ef."{year_col}" AS TEXT), \', \' ORDER BY CAST(ef."{year_col}" AS TEXT) DESC)' if year_col else "'—'"
+    region_agg = f'STRING_AGG(DISTINCT ef."{region_col}", \', \')' if region_col else "'—'"
+    desc_sel   = f'MIN(ef."{desc_col}")' if desc_col else "'—'"
+    sect_sel   = f'MIN(ef."{sect_col}")' if sect_col else "'—'"
+    cat_sel    = f'MIN(ef."{cat_col}")' if cat_col else "'—'"
+    lca_sel    = f'MIN(ef."{lca_col}")' if lca_col else "'—'"
+
+    count_sql = f"""
+        SELECT COUNT(DISTINCT ef."{cid_col}") AS cnt
+        FROM "{ef_table}" ef {join_sql} {where_sql}
+    """
+    count_df = run_query(db_url, count_sql, params or None)
+    total = int(count_df["cnt"].iloc[0]) if not count_df.empty else 0
+
+    offset = page * PAGE_SIZE
+    data_sql = f"""
+        SELECT
+            ef."{cid_col}"   AS activity_id,
+            MIN(ef."{name_col}") AS name,
+            {desc_sel}       AS description,
+            {sect_sel}       AS sector,
+            {cat_sel}        AS category_name,
+            {lca_sel}        AS lca_activity,
+            COUNT(ef.*)      AS factor_count,
+            {year_agg}       AS years,
+            {region_agg}     AS regions
+            {src_select}
+        FROM "{ef_table}" ef {join_sql}
+        {where_sql}
+        GROUP BY ef."{cid_col}"
+        ORDER BY MIN(ef."{name_col}")
+        LIMIT %s OFFSET %s
+    """
+    data_df = run_query(db_url, data_sql,
+                        (params + [PAGE_SIZE, offset]) if params else [PAGE_SIZE, offset])
+    if not data_df.empty:
+        data_df = data_df.fillna("—")
+    return data_df, total, col_map
+
+
+def fetch_children(db_url: str, ef_table: str, src_table: str,
+                   activity_id: str, col_map: dict) -> pd.DataFrame:
+    """Fetch all individual records for a given activity_id."""
+    cid_col = col_map.get("climatiq_id")
+    if not cid_col:
+        return pd.DataFrame()
+
+    sel_parts = []
+    for canonical, actual in col_map.items():
+        if canonical == actual:
+            sel_parts.append(f'ef."{actual}"')
+        else:
+            sel_parts.append(f'ef."{actual}" AS "{canonical}"')
+    ef_col_list = ", ".join(sel_parts) if sel_parts else "ef.*"
+
+    src_cols     = get_table_columns(db_url, src_table) if src_table else []
+    src_name_col = next((c for c in ["name", "source_name", "title"] if c in src_cols), None)
+    src_url_col  = next((c for c in ["url", "link", "website"] if c in src_cols), None)
+    src_id_col   = col_map.get("source_id")
+
+    join_sql = ""
+    src_select = ""
+    if src_id_col and src_table and src_name_col:
+        join_sql   = f'LEFT JOIN "{src_table}" s ON ef."{src_id_col}"=s.id'
+        src_select = f', s."{src_name_col}" AS source_name'
+        if src_url_col:
+            src_select += f', s."{src_url_col}" AS source_url'
+
+    year_col   = col_map.get("year")
+    region_col = col_map.get("region")
+    order_sql  = ""
+    if year_col and region_col:
+        order_sql = f'ORDER BY ef."{year_col}" DESC, ef."{region_col}"'
+    elif year_col:
+        order_sql = f'ORDER BY ef."{year_col}" DESC'
+
+    df = run_query(db_url,
+        f'SELECT {ef_col_list}{src_select} FROM "{ef_table}" ef {join_sql} '
+        f'WHERE ef."{cid_col}" = %s {order_sql}',
+        (activity_id,))
+    if not df.empty:
+        df = df.fillna("—")
+    return df
 
 
 def fetch_page(db_url: str, ef_table: str, src_table: str,

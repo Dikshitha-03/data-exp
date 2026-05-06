@@ -1,3 +1,10 @@
+"""
+app.py — Main entry point for the Emission Factor Explorer Streamlit app.
+Imports and orchestrates db.py (data layer) and ui.py (presentation layer).
+
+Run with:
+    streamlit run app.py
+"""
 
 import streamlit as st
 
@@ -9,7 +16,8 @@ from db import (
     find_best_candidate,
     build_column_map,
     load_filter_options,
-    fetch_page,
+    fetch_grouped_page,
+    fetch_children,
     get_connection,
 )
 from ui import (
@@ -17,7 +25,7 @@ from ui import (
     render_filters,
     render_pagination,
     render_table_header,
-    render_row,
+    render_group_row,
 )
 
 st.set_page_config(layout="wide", page_title="Emission Factor Explorer")
@@ -103,7 +111,6 @@ def main():
         st.stop()
 
     col_map = build_column_map(db_url, ef_table)
-    #st.write("col_map:", col_map)
 
     # ── Filter options ──
     with st.spinner("Loading filters…"):
@@ -133,18 +140,23 @@ def main():
     if active_tags:
         st.info("🔎 " + " | ".join(active_tags))
 
-    # ── Reset page on filter change ──
+    # ── Reset page + cached children on filter change ──
     filter_key = str(sorted(str(active.items())))
     if st.session_state.get("_last_filter_key") != filter_key:
         st.session_state["page_num"] = 0
         st.session_state["_last_filter_key"] = filter_key
+        # Clear cached child results when filters change
+        for k in list(st.session_state.keys()):
+            if k.startswith("children_"):
+                del st.session_state[k]
 
-    # ── Fetch & render ──
+    # ── Fetch grouped activities ──
     page = st.session_state.get("page_num", 0)
 
     with st.spinner("Querying…"):
         try:
-            page_df, total, col_map = fetch_page(db_url, ef_table, src_table, active, page)
+            page_df, total, col_map = fetch_grouped_page(
+                db_url, ef_table, src_table, active, page)
         except Exception as e:
             st.error("Query error. Please contact support.")
             st.exception(e)
@@ -154,10 +166,14 @@ def main():
         st.warning("No results match your filters.")
         return
 
+    # Build a closure so render_group_row can fetch children without knowing db details
+    def get_children(activity_id: str):
+        return fetch_children(db_url, ef_table, src_table, activity_id, col_map)
+
     render_pagination(total, PAGE_SIZE)
     render_table_header()
     for i, (_, row) in enumerate(page_df.iterrows()):
-        render_row(row, i)
+        render_group_row(row, i, get_children)
     render_pagination(total, PAGE_SIZE)
 
 

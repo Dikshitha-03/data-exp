@@ -184,6 +184,72 @@ def inject_styles():
         padding:2px 8px; font-size:11px; color:#1d4ed8;
         display:inline-block; margin:2px;
     }
+
+    /* ── Nested child expanders ── */
+    div[data-testid="stExpander"] {
+        border: 1px solid #e8ecf2 !important;
+        border-radius: 8px !important;
+        margin-bottom: 4px !important;
+        background: #ffffff !important;
+        overflow: hidden !important;
+    }
+    div[data-testid="stExpander"]:hover {
+        border-color: #cbd5e1 !important;
+        box-shadow: 0 1px 6px rgba(15,23,42,0.06) !important;
+    }
+    div[data-testid="stExpander"] summary {
+        font-size: 13px !important;
+        font-weight: 500 !important;
+        color: #1e293b !important;
+        padding: 8px 14px !important;
+        background: #fafbfc !important;
+    }
+    div[data-testid="stExpander"] summary:hover {
+        background: #f1f5f9 !important;
+    }
+    div[data-testid="stExpander"] > div[data-testid="stExpanderDetails"] {
+        padding: 0 !important;
+        border-top: 1px solid #f1f5f9 !important;
+    }
+
+    /* ── Kill Streamlit default vertical gaps ── */
+    div[data-testid="stVerticalBlock"] { gap: 0 !important; }
+    div[data-testid="stVerticalBlockBorderWrapper"] { padding: 0 !important; margin: 0 !important; }
+    div[data-testid="stMarkdownContainer"] { margin-top: 0 !important; margin-bottom: 0 !important; }
+    div[data-testid="stMarkdownContainer"] p { margin: 0 !important; padding: 0 !important; }
+    div[data-testid="stHorizontalBlock"] { gap: 4px !important; margin-bottom: 0 !important; margin-top: 0 !important; }
+    div[data-testid="column"] { padding: 0 2px !important; }
+    div[data-testid="stButton"] { margin: 0 !important; padding: 0 !important; }
+    div[data-testid="stButton"] button { margin: 0 !important; padding: 4px 10px !important; line-height: 1.4 !important; }
+
+    /* ── Child record card ── */
+    .child-card {
+        background: #ffffff;
+        border: 1px solid #e8ecf2;
+        border-radius: 8px;
+        margin: 6px 0 6px 0;
+        overflow: hidden;
+    }
+    .child-kv-table {
+        width: 100%; border-collapse: collapse; font-size: 12px;
+    }
+    .child-kv-table tr { border-bottom: 1px solid #f1f5f9; }
+    .child-kv-table tr:last-child { border-bottom: none; }
+    .child-kv-table td { padding: 6px 12px; vertical-align: middle; }
+    .child-kv-table td.ck-key {
+        font-size: 10px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 0.06em; color: #64748b;
+        width: 150px; min-width: 150px; white-space: nowrap;
+        background: #f8fafc; border-right: 1px solid #f1f5f9;
+    }
+    .child-kv-table td.ck-val {
+        color: #1e293b; font-size: 12.5px; word-break: break-word;
+    }
+    .child-desc {
+        font-size: 12px; color: #64748b; line-height: 1.65;
+        background: #f8fafc; border-top: 1px solid #f1f5f9;
+        padding: 8px 14px;
+    }
 </style>
 
 <script>
@@ -362,8 +428,8 @@ def _fmt_factor(val) -> str:
 # Table header
 # ─────────────────────────────────────────
 def render_table_header():
-    cols = st.columns([3, 1, 1.2, 1.2, 0.7, 1])
-    headers = ["ACTIVITY NAME", "SCOPE", "CO₂E FACTOR", "SOURCE", "YEAR", "REGION"]
+    cols = st.columns([3.5, 0.7, 1.5, 1.8, 1.5])
+    headers = ["ACTIVITY NAME", "FACTORS", "SOURCE", "YEAR", "REGIONS"]
     for col, h in zip(cols, headers):
         col.markdown(
             f"<div style='font-size:10px;font-weight:700;letter-spacing:0.1em;"
@@ -375,162 +441,344 @@ def render_table_header():
 
 
 # ─────────────────────────────────────────
-# Row renderer — expandable accordion
+# Shared helpers
 # ─────────────────────────────────────────
-def render_row(row, idx):
+VALID_UNIT_HINTS = ["kg", "tonne", "ton ", "kwh", "mwh", "gj", "mj", "km",
+                    "liter", "litre", "m3", "usd", "eur", "gbp", "head",
+                    "night", "room", "passenger", "vehicle", "kg co2"]
 
-    def g(key):
-        v = row.get(key, "—")
-        return v if str(v).strip() not in ("", "nan", "None", "—", "NaT") else "—"
+SCOPE_COLORS = {
+    "1": ("#fff3e0", "#e65100"),
+    "2": ("#e8f5e9", "#2e7d32"),
+    "3": ("#e3f2fd", "#1565c0"),
+}
 
-    name        = g("name")
-    scope       = g("scope") if g("scope") != "—" else g("sector")
-    category    = g("category_name")
-    subcategory = g("subcategory")
-    co2e        = g("co2e_factor")
-    source      = g("source_name")
-    year        = g("year")
-    region      = g("region")
-    unit        = g("factor_unit")
-    input_unit  = g("input_unit")
-    desc        = g("description")
-    activity    = g("activity_type")
-    lca         = g("lca_activity")
-    confidence  = g("confidence_score")
-    quality     = g("data_quality")
-    uid         = g("id")
-    climatiq    = g("climatiq_id")
+def _g(row, key):
+    v = row.get(key, "—")
+    return v if str(v).strip() not in ("", "nan", "None", "—", "NaT") else "—"
 
-    VALID_UNIT_HINTS = ["kg", "tonne", "ton ", "kwh", "mwh", "gj", "mj", "km",
-                        "liter", "litre", "m3", "usd", "eur", "gbp", "head",
-                        "night", "room", "passenger", "vehicle", "kg co2"]
-    unit_str = str(unit).lower()
-    unit_ok = unit != "—" and any(h in unit_str for h in VALID_UNIT_HINTS)
-    co2e_display = f"{_fmt_factor(co2e)}{' ' + unit if unit_ok else ''}" if co2e != "—" else "—"
+def _co2e_display(co2e, unit):
+    unit_ok = unit != "—" and any(h in str(unit).lower() for h in VALID_UNIT_HINTS)
+    return f"{_fmt_factor(co2e)}{(' ' + unit) if unit_ok else ''}" if co2e != "—" else "—"
 
-    scope_colors = {
-        "1": ("#fff3e0", "#e65100"),
-        "2": ("#e8f5e9", "#2e7d32"),
-        "3": ("#e3f2fd", "#1565c0"),
-    }
-    badge_bg, badge_fg = scope_colors.get(str(scope), ("#f3e5f5", "#6a1b9a"))
-    badge_label = f"Scope {scope}" if str(scope) in ("1", "2", "3") else str(scope)
-    badge_display = badge_label if len(badge_label) <= 18 else badge_label[:16] + "…"
+def _scope_badge(scope):
+    bg, fg = SCOPE_COLORS.get(str(scope), ("#f3e5f5", "#6a1b9a"))
+    label = f"Scope {scope}" if str(scope) in ("1", "2", "3") else str(scope)
+    return bg, fg, label
 
-    exp_key = f"exp_{idx}"
+def _field_html(label, value):
+    color = "#94a3b8" if value == "—" else "#1e293b"
+    extra = "font-style:italic;" if value == "—" else "font-weight:600;"
+    return (f"<div style='margin-bottom:8px;'>"
+            f"<div style='font-size:10px;font-weight:700;letter-spacing:0.07em;"
+            f"text-transform:uppercase;color:#94a3b8;margin-bottom:2px;'>{label}</div>"
+            f"<div style='background:#f1f5f9;border:1px solid #e2e8f0;padding:4px 10px;"
+            f"border-radius:6px;font-size:12.5px;color:{color};{extra}word-break:break-word;'>"
+            f"{value}</div></div>")
+
+def _section_hdr(text, color, border):
+    return (f"<div style='font-size:11px;font-weight:700;color:{color};"
+            f"text-transform:uppercase;letter-spacing:0.07em;"
+            f"border-bottom:2px solid {border};padding-bottom:4px;margin-bottom:8px;'>{text}</div>")
+
+
+# ─────────────────────────────────────────
+# Level-2: individual child record row
+# Each record is a nested expander (dropdown within dropdown)
+# ─────────────────────────────────────────
+def _render_child(child_row, child_key, parent_name: str = "", parent_activity_id: str = ""):
+    g = lambda k: _g(child_row, k)
+
+    # ── Gather all fields ──
+    scope         = g("scope") if g("scope") != "—" else g("sector")
+    year          = g("year")
+    year_released = g("year_released")
+    region        = g("region")
+    region_name   = g("region_name")
+    country_code  = g("country_code")
+    source        = g("source_name")
+    source_url    = g("source_url") if "source_url" in child_row else "—"
+    source_ref    = g("source_reference")
+    co2e          = g("co2e_factor")
+    co2_f         = g("co2_factor")
+    ch4_f         = g("ch4_factor")
+    n2o_f         = g("n2o_factor")
+    bio_f         = g("biogenic_co2_factor")
+    unit          = g("factor_unit")
+    unit_type     = g("unit_type")
+    input_unit    = g("input_unit")
+    desc          = g("description")
+    lca           = g("lca_activity")
+    activity_type = g("activity_type")
+    data_quality  = g("data_quality")
+    confidence    = g("confidence_score")
+    tags          = g("tags")
+    is_active     = g("is_active")
+    is_custom     = g("is_custom")
+    created_at    = g("created_at")
+    updated_at    = g("updated_at")
+    climatiq      = g("climatiq_id")
+    ext_ref       = g("external_ref")
+    row_id        = g("id")
+
+    child_name     = g("name") if g("name") != "—" else parent_name
+    child_id_label = climatiq if climatiq != "—" else parent_activity_id
+
+    year_suffix = f" · {year}" if year != "—" else ""
+    lca_suffix  = f" · {lca}"  if lca  != "—" else ""
+    name_line   = f"{child_name}{year_suffix}{lca_suffix}" if child_name != "—" else child_id_label
+    show_id     = child_id_label if (child_id_label and child_id_label != child_name) else ""
+
+    co2e_disp = _co2e_display(co2e, unit)
+    bg, fg, badge_label = _scope_badge(scope)
+
+    # region display: prefer region_name, fallback to region or country_code
+    region_disp = region_name if region_name != "—" else (region if region != "—" else country_code)
+    if region_disp != "—" and country_code != "—" and country_code not in region_disp:
+        region_disp = f"{region_disp} ({country_code})"
+
+    # Expander label
+    label_parts = [name_line]
+    if co2e_disp != "—":
+        label_parts.append(f"  |  {co2e_disp}")
+    if region_disp != "—":
+        label_parts.append(f"  ·  {region_disp}")
+    expander_label = "".join(label_parts)
+
+    def _kv(k, v):
+        return f"<tr><td class='ck-key'>{k}</td><td class='ck-val'>{v}</td></tr>"
+
+    def _plain(val):
+        return f"<span style='color:#475569;'>{val}</span>"
+
+    def _mono(val):
+        return f"<span style='font-family:monospace;font-size:11.5px;color:#334155;'>{val}</span>"
+
+    def _green(val):
+        return (f"<span style='font-family:monospace;font-size:12.5px;font-weight:700;"
+                f"color:#166534;background:#f0fdf4;padding:2px 8px;border-radius:4px;'>{val}</span>")
+
+    def _badge(bg_, fg_, label_):
+        return (f"<span style='background:{bg_};color:{fg_};padding:2px 10px;"
+                f"border-radius:8px;font-size:11px;font-weight:700;"
+                f"display:inline-block;line-height:1.5;'>{label_}</span>")
+
+    def _section_row(label):
+        return (f"<tr><td colspan='2' style='background:#f1f5f9;padding:6px 12px;"
+                f"font-size:10px;font-weight:700;text-transform:uppercase;"
+                f"letter-spacing:0.09em;color:#64748b;border-top:2px solid #e2e8f0;"
+                f"border-bottom:1px solid #e8ecf2;'>{label}</td></tr>")
+
+    with st.expander(expander_label, expanded=False):
+        rows_html = ""
+
+        # ── Description block at top if present ──
+        desc_html = ""
+        if desc != "—":
+            desc_html = f"<div class='child-desc'>{desc}</div>"
+
+        # ══ MAIN INFO ══
+        rows_html += _section_row("Emission Factor Info")
+
+        # Activity
+        act_val = f"<span style='font-size:13px;font-weight:600;color:#1e293b;line-height:1.4;'>{name_line}</span>"
+        if show_id:
+            act_val += f"<br>{_mono(show_id)}"
+        rows_html += _kv("Activity", act_val)
+
+        # Scope
+        if scope != "—":
+            rows_html += _kv("Scope", _badge(bg, fg, badge_label))
+
+        # CO2e Factor
+        if co2e_disp != "—":
+            rows_html += _kv("CO₂e Factor", _green(co2e_disp))
+
+        # Individual gas factors
+        gas_parts = []
+        if co2_f != "—":  gas_parts.append(f"CO₂: {_fmt_factor(co2_f)}")
+        if ch4_f != "—":  gas_parts.append(f"CH₄: {_fmt_factor(ch4_f)}")
+        if n2o_f != "—":  gas_parts.append(f"N₂O: {_fmt_factor(n2o_f)}")
+        if bio_f != "—":  gas_parts.append(f"Biogenic CO₂: {_fmt_factor(bio_f)}")
+        if gas_parts:
+            rows_html += _kv("Gas Breakdown",
+                f"<span style='font-family:monospace;font-size:12px;color:#475569;'>"
+                + " &nbsp;·&nbsp; ".join(gas_parts) + "</span>")
+
+        # Source
+        if source != "—":
+            src_val = source
+            if source_url != "—":
+                src_val = f"<a href='{source_url}' target='_blank' class='kv-link'>{source}</a>"
+            rows_html += _kv("Source", src_val)
+
+        # Source reference / dataset
+        if source_ref != "—":
+            rows_html += _kv("Source Dataset", _plain(source_ref))
+
+        # Year & Year Released
+        if year != "—":
+            rows_html += _kv("Year", _plain(year))
+        if year_released != "—":
+            rows_html += _kv("Year Released", _plain(year_released))
+
+        # Region
+        if region_disp != "—":
+            rows_html += _kv("Region", _plain(region_disp))
+
+        # Unit type & factor unit
+        if unit_type != "—":
+            rows_html += _kv("Unit Type(s)", _plain(unit_type))
+        if input_unit != "—":
+            rows_html += _kv("Input Unit", _mono(input_unit))
+
+        # LCA Activity
+        if lca != "—":
+            rows_html += _kv("LCA Activity", _plain(lca))
+
+        # Activity type
+        if activity_type != "—":
+            rows_html += _kv("Activity Type", _plain(activity_type))
+
+        # ══ DETAILED METADATA ══
+        meta_rows = ""
+        if climatiq != "—":
+            meta_rows += _kv("Activity ID", _mono(climatiq))
+        if row_id != "—":
+            meta_rows += _kv("ID", _mono(row_id))
+        if ext_ref != "—":
+            meta_rows += _kv("External Ref", _mono(ext_ref))
+        if data_quality != "—":
+            meta_rows += _kv("Data Quality", _plain(data_quality))
+        if confidence != "—":
+            try:
+                pct = int(float(confidence) * 100)
+                bar = (f"<span style='display:inline-flex;align-items:center;gap:7px;'>"
+                       f"<span style='width:70px;height:5px;background:#e2e8f0;border-radius:3px;"
+                       f"display:inline-block;overflow:hidden;'>"
+                       f"<span style='width:{pct}%;height:5px;background:#3b82f6;"
+                       f"border-radius:3px;display:block;'></span></span>"
+                       f"<span style='font-size:12px;color:#475569;'>{pct}%</span></span>")
+                meta_rows += _kv("Confidence", bar)
+            except Exception:
+                meta_rows += _kv("Confidence", _plain(confidence))
+        if tags != "—":
+            tag_list = str(tags).strip("[]").replace("'", "").split(",")
+            tag_html = " ".join(
+                f"<span style='background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;"
+                f"padding:1px 7px;font-size:11px;color:#475569;margin-right:3px;'>{t.strip()}</span>"
+                for t in tag_list if t.strip()
+            )
+            if tag_html:
+                meta_rows += _kv("Tags", tag_html)
+        if is_active != "—":
+            active_html = ("<span class='status-active'>● Active</span>"
+                           if str(is_active).lower() in ("true", "1", "yes")
+                           else "<span class='status-inactive'>● Inactive</span>")
+            meta_rows += _kv("Status", active_html)
+        if is_custom != "—":
+            lic = ("Premium" if str(is_custom).lower() in ("true", "1", "yes") else "Core")
+            meta_rows += _kv("License", _plain(lic))
+        if updated_at != "—":
+            meta_rows += _kv("Last Updated",
+                f"<span class='ts-mono'>{str(updated_at)[:19]}</span>")
+        elif created_at != "—":
+            meta_rows += _kv("Created",
+                f"<span class='ts-mono'>{str(created_at)[:19]}</span>")
+
+        if meta_rows:
+            rows_html += _section_row("Detailed Metadata")
+            rows_html += meta_rows
+
+        st.markdown(
+            f"<div class='child-card'>"
+            f"<table class='child-kv-table'>{rows_html}</table>"
+            f"{desc_html}"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+
+# ─────────────────────────────────────────
+# Level-1: activity group row
+# ─────────────────────────────────────────
+def render_group_row(group_row, idx, fetch_children_fn):
+    g = lambda k: _g(group_row, k)
+
+    activity_id  = g("activity_id")
+    name         = g("name")
+    desc         = g("description")
+    sector       = g("sector")
+    category     = g("category_name")
+    lca          = g("lca_activity")
+    factor_count = g("factor_count")
+    years        = g("years")
+    regions      = g("regions")
+    source_names = g("source_names")
+
+    exp_key = f"grp_exp_{idx}"
     if exp_key not in st.session_state:
         st.session_state[exp_key] = False
 
-    cols = st.columns([3, 1, 1.2, 1.2, 0.7, 1])
+    is_open = st.session_state[exp_key]
 
-    with cols[0]:
-        arrow = "▼" if st.session_state[exp_key] else "▶"
-        st.markdown(
-            f"""<style>
-            div[data-testid="stButton"] button#btn_{idx} {{
-                background:none;border:none;padding:0;
-                font-size:14px;font-weight:600;color:#1e293b;
-                text-align:left;cursor:pointer;
-            }}
-            div[data-testid="stButton"] button#btn_{idx}:hover {{
-                color:#6366f1;
-            }}
-            </style>""",
-            unsafe_allow_html=True
-        )
-        if st.button(f"{arrow}  {name}", key=f"btn_{idx}", use_container_width=True):
-            st.session_state[exp_key] = not st.session_state[exp_key]
+    with st.container(border=True):
+        cols = st.columns([3.5, 0.7, 1.5, 1.8, 1.5])
+        with cols[0]:
+            arrow = "▼" if is_open else "▶"
+            if st.button(f"{arrow}  {name}", key=f"grpbtn_{idx}", use_container_width=True):
+                st.session_state[exp_key] = not st.session_state[exp_key]
+                st.rerun()
+        cols[1].markdown(
+            f"<div style='padding-top:4px;'>"
+            f"<span style='background:#2563eb;color:#fff;font-size:11px;font-weight:700;"
+            f"padding:2px 9px;border-radius:20px;'>{factor_count}</span></div>",
+            unsafe_allow_html=True)
+        cols[2].markdown(f"<span style='font-size:12.5px;color:#475569;'>{source_names}</span>", unsafe_allow_html=True)
+        cols[3].markdown(f"<span style='font-size:12.5px;color:#475569;'>{years}</span>", unsafe_allow_html=True)
+        cols[4].markdown(f"<span style='font-size:12.5px;color:#475569;'>{regions}</span>", unsafe_allow_html=True)
 
-    cols[1].markdown(
-        f"<span style='background:{badge_bg};color:{badge_fg};"
-        f"padding:3px 7px;border-radius:10px;font-size:11px;font-weight:700;"
-        f"display:inline-block;white-space:normal;word-break:break-word;"
-        f"line-height:1.4;'>{badge_label}</span>",
-        unsafe_allow_html=True
-    )
-    cols[2].markdown(
-        f"<span style='font-family:monospace;font-size:13px;"
-        f"font-weight:600;color:#166534;background:#f0fdf4;"
-        f"padding:3px 8px;border-radius:5px;'>{co2e_display}</span>",
-        unsafe_allow_html=True
-    )
-    cols[3].markdown(f"<span style='font-size:13px;color:#475569;'>{source}</span>", unsafe_allow_html=True)
-    cols[4].markdown(f"<span style='font-size:13px;color:#475569;'>{year}</span>",   unsafe_allow_html=True)
-    cols[5].markdown(f"<span style='font-size:13px;color:#475569;'>{region}</span>", unsafe_allow_html=True)
-
-    if st.session_state[exp_key]:
-
-        def field(label, value):
-            color = "#94a3b8" if value == "—" else "#1e293b"
-            extra = "font-style:italic;" if value == "—" else "font-weight:600;"
+        if is_open:
             st.markdown(
-                f"""<div style="margin-bottom:10px;">
-                    <div style="font-size:10px;font-weight:700;letter-spacing:0.07em;
-                                text-transform:uppercase;color:#94a3b8;margin-bottom:3px;">
-                        {label}
-                    </div>
-                    <div style="background:#f1f5f9;border:1px solid #e2e8f0;
-                                padding:5px 11px;border-radius:6px;font-size:13px;
-                                color:{color};{extra}word-break:break-word;">
-                        {value}
-                    </div>
-                </div>""",
+                "<hr style='margin:4px 0 8px 0;border:none;border-top:1px solid #e2e8f0;'>",
                 unsafe_allow_html=True
             )
 
-        def section_header(text, color, border_color):
-            st.markdown(
-                f"<div style='font-size:11px;font-weight:700;color:{color};"
-                f"text-transform:uppercase;letter-spacing:0.07em;"
-                f"border-bottom:2px solid {border_color};"
-                f"padding-bottom:5px;margin-bottom:10px;'>{text}</div>",
-                unsafe_allow_html=True
-            )
+            # ── Chips row ──
+            CHIP_STYLE = ("background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;"
+                          "padding:2px 10px;font-size:12px;color:#475569;margin-right:6px;"
+                          "display:inline-block;margin-bottom:4px;")
+            ID_STYLE   = ("background:#f3f0ff;border:1px solid #e9d5ff;border-radius:4px;"
+                          "padding:2px 10px;font-size:12px;color:#6d28d9;font-family:monospace;"
+                          "margin-right:6px;display:inline-block;margin-bottom:4px;")
 
-        with st.container():
-            st.markdown(
-                "<div style='background:#f8fafc;border:1px solid #e2e8f0;"
-                "border-radius:10px;padding:16px;margin:6px 0 8px 0;'>",
-                unsafe_allow_html=True
-            )
+            chips_html = ""
+            if sector != "—":
+                chips_html += f"<span style='{CHIP_STYLE}'>Sector: <b>{sector}</b></span>"
+            if category != "—":
+                chips_html += f"<span style='{CHIP_STYLE}'>Category: <b>{category}</b></span>"
+            if lca != "—":
+                chips_html += f"<span style='{CHIP_STYLE}'>LCA: <b>{lca}</b></span>"
+            if activity_id != "—":
+                chips_html += f"<span style='{ID_STYLE}'>{activity_id}</span>"
 
-            if desc != "—":
+            if chips_html:
                 st.markdown(
-                    f"<div style='background:#eef2ff;border-left:4px solid #6366f1;"
-                    f"padding:10px 14px;border-radius:6px;font-size:14px;"
-                    f"color:#334155;line-height:1.6;margin-bottom:12px;'>"
-                    f"{desc}</div>",
+                    f"<div style='padding:2px 0 6px 0;'>{chips_html}</div>",
                     unsafe_allow_html=True
                 )
 
-            c1, c2, c3 = st.columns(3)
+            # ── Children ──
+            children_key = f"children_{activity_id}"
+            if children_key not in st.session_state:
+                st.session_state[children_key] = fetch_children_fn(activity_id)
+            children_df = st.session_state[children_key]
 
-            with c1:
-                section_header(" Emission Info", "#6366f1", "#e0e7ff")
-                field("CO₂e Factor", co2e_display)
-                field("Unit", unit)
-                field("Input Unit", input_unit)
-                field("Source", source)
-                field("Year", year)
-                field("Region", region)
-
-            with c2:
-                section_header(" Classification", "#0891b2", "#cffafe")
-                field("Category", category)
-                field("Subcategory", subcategory)
-                field("Activity", activity)
-                field("LCA", lca)
-                field("Confidence", confidence)
-                field("Data Quality", quality)
-
-            with c3:
-                section_header(" IDs", "#7c3aed", "#ede9fe")
-                field("UUID", uid)
-                field("Climatiq ID", climatiq)
-
-            st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown(
-        "<hr style='margin:4px 0;border:none;border-top:1px solid #f1f5f9;'>",
-        unsafe_allow_html=True
-    )
+            if children_df.empty:
+                st.markdown(
+                    "<div style='color:#94a3b8;font-size:12px;padding:6px 4px;'>No records found.</div>",
+                    unsafe_allow_html=True
+                )
+            else:
+                for ci, (_, child) in enumerate(children_df.iterrows()):
+                    _render_child(child, f"{idx}_{ci}", parent_name=name, parent_activity_id=activity_id)
