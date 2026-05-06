@@ -384,7 +384,7 @@ def render_row(row, idx):
         return v if str(v).strip() not in ("", "nan", "None", "—", "NaT") else "—"
 
     name        = g("name")
-    scope       = g("scope")
+    scope       = g("scope") if g("scope") != "—" else g("sector")
     category    = g("category_name")
     subcategory = g("subcategory")
     co2e        = g("co2e_factor")
@@ -401,7 +401,12 @@ def render_row(row, idx):
     uid         = g("id")
     climatiq    = g("climatiq_id")
 
-    co2e_display = f"{_fmt_factor(co2e)} {unit}" if co2e != "—" else "—"
+    VALID_UNIT_HINTS = ["kg", "tonne", "ton ", "kwh", "mwh", "gj", "mj", "km",
+                        "liter", "litre", "m3", "usd", "eur", "gbp", "head",
+                        "night", "room", "passenger", "vehicle", "kg co2"]
+    unit_str = str(unit).lower()
+    unit_ok = unit != "—" and any(h in unit_str for h in VALID_UNIT_HINTS)
+    co2e_display = f"{_fmt_factor(co2e)}{' ' + unit if unit_ok else ''}" if co2e != "—" else "—"
 
     scope_colors = {
         "1": ("#fff3e0", "#e65100"),
@@ -409,6 +414,8 @@ def render_row(row, idx):
         "3": ("#e3f2fd", "#1565c0"),
     }
     badge_bg, badge_fg = scope_colors.get(str(scope), ("#f3e5f5", "#6a1b9a"))
+    badge_label = f"Scope {scope}" if str(scope) in ("1", "2", "3") else str(scope)
+    badge_display = badge_label if len(badge_label) <= 18 else badge_label[:16] + "…"
 
     exp_key = f"exp_{idx}"
     if exp_key not in st.session_state:
@@ -436,8 +443,9 @@ def render_row(row, idx):
 
     cols[1].markdown(
         f"<span style='background:{badge_bg};color:{badge_fg};"
-        f"padding:3px 9px;border-radius:20px;font-size:11px;"
-        f"font-weight:700;white-space:nowrap;'>Scope {scope}</span>",
+        f"padding:3px 7px;border-radius:10px;font-size:11px;font-weight:700;"
+        f"display:inline-block;white-space:normal;word-break:break-word;"
+        f"line-height:1.4;'>{badge_label}</span>",
         unsafe_allow_html=True
     )
     cols[2].markdown(

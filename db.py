@@ -31,7 +31,7 @@ COLUMN_ALIASES = {
     "external_ref":         ["external_ref", "external_reference", "ref"],
     "scope":                ["scope", "ghg_scope", "emission_scope", "ghg_category", "scope_category", "scope_name"],
     "sector":               ["sector", "industry_sector", "economic_sector"],
-    "subcategory":          ["subcategory", "sub_category", "category_sector", "sector_detail", "sector"],
+    "subcategory":          ["subcategory", "sub_category", "category_sector", "sector_detail"],
     "category_name":        ["category_name", "category", "activity_category"],
     "name":                 ["name", "activity_name", "factor_name", "title"],
     "activity_type":        ["activity_type", "type", "factor_type"],
